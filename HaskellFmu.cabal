@@ -42,10 +42,10 @@ build-type:          Simple
 
 -- Extra files to be distributed with the package, such as examples or a
 -- README.
-extra-source-files:  CHANGELOG.md
+extra-source-files:  CHANGELOG.md src/Data/HFMU/Internal/fmi2headers/fmi2Functions.h src/Data/HFMU/Internal/fmi2headers/fmi2TypesPlatform.h src/Data/HFMU/Internal/fmi2headers/fmi2FunctionTypes.h
 
 -- Constraint on the version of Cabal needed to build this package.
-cabal-version:       >=1.10
+cabal-version:       >=2.0
 
 
 data-files:
@@ -69,7 +69,7 @@ library
   other-extensions:    DeriveGeneric, ScopedTypeVariables, DuplicateRecordFields
 
   -- Other library packages from which modules are imported.
-  build-depends:       base >=4.11 && <4.12, unordered-containers >=0.2 && <0.3
+  build-depends:       base, unordered-containers
 
   -- Directories containing source files.
   hs-source-dirs:      src
@@ -77,7 +77,7 @@ library
   -- Extra tools (e.g. alex, hsc2hs, ...) needed to build the source.
   build-tools:         hsc2hs
 
-  Include-dirs: src/Data/HFMU/Internal/fmi2headers
+  Include-dirs: "src/Data/HFMU/Internal/fmi2headers"
 
 
   -- Base language which the package is written in.
