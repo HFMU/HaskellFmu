@@ -17,7 +17,8 @@ data FMUState = Instantiated
   | InitializationMode
   | SlaveInitialized
   | Terminated
-  deriving (Enum, Show)
+  | ERROR
+  deriving (Enum, Eq, Show)
 
 type FMUStateType a = StablePtr (IORef (FMIComponent a))
 

@@ -1,11 +1,9 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 module HFMU where
 
 import Foreign.C.String
 import Foreign.C.Types
-import Foreign (Ptr, nullPtr, StablePtr)
 import Foreign
 import Data.IORef
 import Control.Monad
@@ -16,28 +14,56 @@ import Debug.Trace
 import qualified Data.HFMU.Types as T
 import qualified Data.HFMU.Internal.FMITypes as FMIT
 import qualified Data.HFMU.Internal.FMIFunctionTypes as FMIFT
+import Data.Maybe
 
 
 foreign import ccall "dynamic" mkFunPtrLogger :: FMIT.CallbackLogger -> FMIT.CompEnvT -> CString -> FMIT.FMIStatus -> CString -> CString -> IO ()
 
+{- |
+This function takes two arguments: StablePtr (comp) and Function (f).
+It extracts the state from 'comp' and applies 'f' to it.
+'f' returns a tuple of state and status.
+'comp' is updated with the new state and the status is converted to a 'CInt'
+-}
+firstFunction :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)) -> IO CInt
+firstFunction comp f = do
+  state <- getStateImpure comp
+  let (state', status) = f state in
+    writeState comp state' >> (pure . FMIT.statusToCInt) status
+
+firstFunctionIO :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> IO (FMIT.FMIComponent a, T.Status)) -> IO CInt
+firstFunctionIO comp f = do
+  state <- getStateImpure comp
+  (state', status) <- f state
+  writeState comp state' >> (pure . FMIT.statusToCInt) status
+
+writeState :: StablePtr (IORef a) -> a -> IO ()
+writeState ptr state = do
+  ioref <- deRefStablePtr ptr
+  writeIORef ioref state
+
+
+reportFatal :: FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)
+reportFatal state = (state {FMIT.fcState = FMIT.ERROR}, T.Fatal)
 
 -- ==============================================================
 -- =================== STATE CHANGE FUNCTIONS ===================
 -- ==============================================================
-
--- First function call to the FMU. Should move Setup to FMIComponent
---fmi2Instantiate :: instanceName -> fmuType -> fmuGUID -> fmuResourceLocation -> functions -> visible -> loggingOn
+{- |
+First call to the FMU.
+Changed state to "Instantiated".
+Returns a pointer to the state. The same pointer must be used subsequently.
+-}
 foreign export ccall fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
 fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
 fmi2Instantiate _ _ _ _ ptrCbFuncs _ _ = do
+  -- Extract callback functions
   (cbFuncs :: FMIT.CallbackFunctions) <- peek ptrCbFuncs
-  -- logger fmi2ComponentEnv instanceName::String Status::fmi2Status Category::String Message::String
+  -- Create a test log message
   instanceName :: CString <- newCString "instanceName";
   category :: CString <- newCString "logError";
   msg :: CString <- newCString "HS-Message: Error";
-  -- Invoke the function pointer
   (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category msg
-  -- Move Setup to FMIComponent
   state <- getSetupImpure setupVar
   case state of
     Nothing -> putStrLn "NothingCase" >> (newStablePtr =<< newIORef FMIT.FMIComponent {}) -- ERROR SHOULD BE THROWN
@@ -47,41 +73,63 @@ fmi2Instantiate _ _ _ _ ptrCbFuncs _ _ = do
                                          fcEndTime = Nothing, fcState = FMIT.Instantiated, fcPeriod = T.sPeriod s, fcRemTime = T.sPeriod s, fcUserState = T.sUserState s}
       newStablePtr ioref
 
--- StablePtr IORef FMIComponent -> CBool -> CDouble -> CDouble -> CBool -> CDouble -> IO (Status)
--- fmi2Status fmi2SetupExperiment(fmi2Component c,
--- fmi2Boolean toleranceDefined,
--- fmi2Real tolerance,
--- fmi2Real startTime,
--- fmi2Boolean stopTimeDefined,
--- fmi2Real stopTime);
--- Everything besides stopTime is ignored and stopTime is expected to be defined.
+{- |
+Defines the end time.
+Does not alter FMU state.
+-}
 foreign export ccall fmi2SetupExperiment :: FMIFT.FMISetupExperimentType a
 fmi2SetupExperiment :: FMIFT.FMISetupExperimentType a
-fmi2SetupExperiment comp _ _ _ _ stopTime = do
-  state' <- getStateImpure comp
-  updStateCalcStatusImpure comp ((state' {FMIT.fcEndTime = Just $ realToFrac stopTime}), T.OK)
+fmi2SetupExperiment comp _ _ _ _ stopTime =
+  let f state = (state {FMIT.fcEndTime = Just $ realToFrac stopTime}, T.OK) in
+    firstFunction comp f
 
+
+{- |
+Changes state to "Initialization Mode"
+-}
 foreign export ccall fmi2EnterInitializationMode :: FMIFT.FMIEnterInitializationModeType a
 fmi2EnterInitializationMode :: FMIFT.FMIEnterInitializationModeType a
-fmi2EnterInitializationMode comp = do
-  state <- getStateImpure comp
-  case FMIT.fcEndTime state of
-    Just _ -> (writeStateImpure comp $ state {FMIT.fcState = FMIT.InitializationMode}) >> pure (FMIT.statusToCInt T.OK)
-    Nothing -> pure $ FMIT.statusToCInt T.Fatal
+fmi2EnterInitializationMode comp =
+  firstFunction comp enterInitializationMode
 
+enterInitializationMode :: FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)
+enterInitializationMode state =
+  if FMIT.fcState state == FMIT.Instantiated && (isJust . FMIT.fcEndTime) state
+  then (state {FMIT.fcState = FMIT.InitializationMode}, T.OK)
+  else reportFatal state
+    
+{- |
+Changes state to slaveInitialized
+-}
 foreign export ccall fmi2ExitInitializationMode :: FMIFT.FMIExitInitializationModeType a
 fmi2ExitInitializationMode :: FMIFT.FMIExitInitializationModeType a
-fmi2ExitInitializationMode comp = do
-  state <- getStateImpure comp
-  writeStateImpure comp $ updateState state FMIT.SlaveInitialized
-  pure . FMIT.statusToCInt $ T.OK
+fmi2ExitInitializationMode comp = 
+  firstFunction comp exitInitializationMode
 
+exitInitializationMode :: FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)
+exitInitializationMode state =
+  if FMIT.fcState state == FMIT.Instantiated
+  then (state {FMIT.fcState = FMIT.SlaveInitialized}, T.OK)
+  else reportFatal state
+
+{- |
+Changes state to terminated
+-}
 foreign export ccall fmi2Terminate :: FMIFT.FMITerminateType a
 fmi2Terminate :: FMIFT.FMITerminateType a
-fmi2Terminate comp = do
-  state <- getStateImpure comp
-  updStateCalcStatusImpure comp (state {FMIT.fcState = FMIT.Terminated}, T.OK)  
+fmi2Terminate comp =
+  firstFunction comp terminate
 
+terminate :: FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)
+terminate state =
+  if FMIT.fcState state == FMIT.SlaveInitialized
+  then (state {FMIT.fcState = FMIT.Terminated}, T.OK)
+  else reportFatal state
+
+{- |
+Final call.
+Releases state.
+-}
 foreign export ccall fmi2FreeInstance :: FMIFT.FMIFreeInstanceType a
 fmi2FreeInstance :: FMIFT.FMIFreeInstanceType a
 fmi2FreeInstance comp = do
@@ -91,56 +139,31 @@ fmi2FreeInstance comp = do
 -- ==============================================================
 -- =================== SET FUNCTIONS ============================
 -- ==============================================================
-
+{- |
+FFI function to set an integer
+-}
 foreign export ccall fmi2SetInteger :: FMIFT.FMISetIntegerType a
 fmi2SetInteger :: FMIFT.FMISetIntegerType a
 fmi2SetInteger comp varRefs size varVals =
-  setLogicImpure comp varRefs size varVals (T.IntegerVal . fromIntegral)
+  let f state = setLogicImpure state varRefs size varVals (T.IntegerVal . fromIntegral) in
+    firstFunctionIO comp f
 
-
-
+{- |
+FFI function to set a real
+-}
 foreign export ccall fmi2SetReal :: FMIFT.FMISetRealType a
 fmi2SetReal :: FMIFT.FMISetRealType a
 fmi2SetReal comp varRefs size varVals =
-  setLogicImpure comp varRefs size varVals (T.RealVal . realToFrac)
---  retrieveStateAndCallF comp setLogicImpure2 >>= (\x -> x varRefs size varVals (T.RealVal . realToFrac))
+  let f state = setLogicImpure state varRefs size varVals (T.RealVal . realToFrac) in
+    firstFunctionIO comp f
 
-setLogicImpure :: Storable b => FMIT.FMUStateType a -> Ptr CUInt -> CSize -> Ptr b -> (b -> T.SVTypeVal) -> IO CInt
-setLogicImpure comp varRefs size varVals varValConvF =
+setLogicImpure :: Storable b => FMIT.FMIComponent a -> Ptr CUInt -> CSize -> Ptr b -> (b -> T.SVTypeVal) -> IO (FMIT.FMIComponent a, T.Status)
+setLogicImpure state refs size vals valConvF =
   do
-    state <- getStateImpure comp
-    varRefs' :: [CUInt] <- peekArray (fromIntegral size) varRefs
-    varVals' <- peekArray (fromIntegral size) varVals
-    let
-      varVals'' :: [T.SVTypeVal] = map varValConvF varVals'
-      varRefs'' = map fromIntegral varRefs'
-      stateStatus = setLogic state varRefs'' varVals''
-      in
-      updStateCalcStatusImpure comp stateStatus
+    refs' :: [Int] <- map fromIntegral <$> peekArray (fromIntegral size) refs
+    vals' :: [T.SVTypeVal] <- map valConvF <$> peekArray (fromIntegral size) vals
+    return $ setLogic state refs' vals'
 
---setLogicImpure2 :: Storable b => FMIT.FMIComponent a -> Ptr CUInt -> CSize -> Ptr b -> (b -> T.SVTypeVal) -> IO CInt
---setLogicImpure2 state varRefs size varVals varValConvF =
---  do
---    varRefs' :: [CUInt] <- peekArray (fromIntegral size) varRefs
---    varVals' <- peekArray (fromIntegral size) varVals
---    let
---      varVals'' :: [T.SVTypeVal] = map varValConvF varVals'
---      varRefs'' = map fromIntegral varRefs'
---      stateStatus = setLogic state varRefs'' varVals''
---      in
---      return 5
-      
--- POssible better function. Retrieves the state from component
-purePreComponentHandler :: FMIT.FMUStateType a -> (FMIT.FMIComponent a -> b) -> IO b
-purePreComponentHandler comp f = do
-  state <- getStateImpure comp
-  return $ f state
-
--- POssible better function. Retrieves the state from component
-impurePreComponentHandler :: FMIT.FMUStateType a -> (FMIT.FMIComponent a -> IO b) -> IO b
-impurePreComponentHandler comp f = do
-  state <- getStateImpure comp
-  f state
 
 setLogic :: FMIT.FMIComponent a -> [Int] -> [T.SVTypeVal] -> (FMIT.FMIComponent a,T.Status)
 setLogic state@FMIT.FMIComponent {fcVars = vs} vRefs vVals =
