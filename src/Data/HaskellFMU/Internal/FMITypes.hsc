@@ -1,6 +1,6 @@
-module Data.HFMU.Internal.FMITypes where
+module Data.HaskellFMU.Internal.FMITypes where
 
-import qualified Data.HFMU.Types as T
+import qualified Data.HaskellFMU.Types as T
 import Foreign.C.Types (CInt)
 import Foreign.C.String
 import Foreign (StablePtr, FunPtr, Ptr, nullPtr)

@@ -4,7 +4,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 -- The name of the package.
-name:                HaskellFmu
+name:                HaskellFMU
 
 -- The package version.  See the Haskell package versioning policy (PVP)
 -- for standards guiding when and how versions should be incremented.
@@ -42,7 +42,7 @@ build-type:          Simple
 
 -- Extra files to be distributed with the package, such as examples or a
 -- README.
-extra-source-files:  CHANGELOG.md src/Data/HFMU/Internal/fmi2headers/fmi2Functions.h src/Data/HFMU/Internal/fmi2headers/fmi2TypesPlatform.h src/Data/HFMU/Internal/fmi2headers/fmi2FunctionTypes.h
+extra-source-files:  CHANGELOG.md src/Data/HaskellFMU/Internal/fmi2headers/fmi2Functions.h src/Data/HaskellFMU/Internal/fmi2headers/fmi2TypesPlatform.h src/Data/HaskellFMU/Internal/fmi2headers/fmi2FunctionTypes.h
 
 -- Constraint on the version of Cabal needed to build this package.
 cabal-version:       >=2.0
@@ -60,10 +60,10 @@ library
   Ghc-Options:
               -fobject-code
   -- Modules exported by the library.
-  exposed-modules: HMOperations, HFMU, Data.HFMU.Types
+  exposed-modules: HMOperations, HaskellFMU, Data.HaskellFMU.Types
 
   -- Modules included in this library but not exported.
-  other-modules: Data.HFMU.Internal.FMITypes,  Data.HFMU.Internal.FMIFunctionTypes
+  other-modules: Data.HaskellFMU.Internal.FMITypes,  Data.HaskellFMU.Internal.FMIFunctionTypes
 
   -- LANGUAGE extensions used by modules in this package.
   other-extensions:    DeriveGeneric, ScopedTypeVariables, DuplicateRecordFields
@@ -77,7 +77,7 @@ library
   -- Extra tools (e.g. alex, hsc2hs, ...) needed to build the source.
   build-tools:         hsc2hs
 
-  Include-dirs: "src/Data/HFMU/Internal/fmi2headers"
+  Include-dirs: "src/Data/HaskellFMU/Internal/fmi2headers"
 
 
   -- Base language which the package is written in.

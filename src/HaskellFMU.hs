@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-module HFMU where
+module HaskellFMU where
 
 import Foreign.C.String
 import Foreign.C.Types
@@ -11,9 +11,9 @@ import System.IO.Unsafe
 import qualified Data.HashMap.Strict as HM
 import Data.List
 import Debug.Trace
-import qualified Data.HFMU.Types as T
-import qualified Data.HFMU.Internal.FMITypes as FMIT
-import qualified Data.HFMU.Internal.FMIFunctionTypes as FMIFT
+import qualified Data.HaskellFMU.Types as T
+import qualified Data.HaskellFMU.Internal.FMITypes as FMIT
+import qualified Data.HaskellFMU.Internal.FMIFunctionTypes as FMIFT
 import Data.Maybe
 
 
@@ -54,9 +54,9 @@ First call to the FMU.
 Changed state to "Instantiated".
 Returns a pointer to the state. The same pointer must be used subsequently.
 -}
-foreign export ccall fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
-fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
-fmi2Instantiate _ _ _ _ ptrCbFuncs _ _ = do
+foreign export ccall fmi2Instantiatee :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
+fmi2Instantiatee :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
+fmi2Instantiatee _ _ _ _ ptrCbFuncs _ _ = do
   -- Extract callback functions
   (cbFuncs :: FMIT.CallbackFunctions) <- peek ptrCbFuncs
   -- Create a test log message
@@ -72,6 +72,26 @@ fmi2Instantiate _ _ _ _ ptrCbFuncs _ _ = do
       ioref <- newIORef  FMIT.FMIComponent {fcVars = T.sSVs s, fcDoStep = T.sDoStepFunc s,
                                          fcEndTime = Nothing, fcState = FMIT.Instantiated, fcPeriod = T.sPeriod s, fcRemTime = T.sPeriod s, fcUserState = T.sUserState s}
       newStablePtr ioref
+
+--foreign export ccall fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
+--fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
+--fmi2Instantiate _ _ _ _ ptrCbFuncs _ _ = do
+--  -- Extract callback functions
+--  (cbFuncs :: FMIT.CallbackFunctions) <- peek ptrCbFuncs
+--  -- Create a test log message
+--  instanceName :: CString <- newCString "instanceName";
+--  category :: CString <- newCString "logError";
+--  msg :: CString <- newCString "HS-Message: Error";
+--  (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category msg
+--  state <- getSetupImpure setupVar
+--  case state of
+--    Nothing -> putStrLn "NothingCase" >> (newStablePtr =<< newIORef FMIT.FMIComponent {}) -- ERROR SHOULD BE THROWN
+--    Just s -> do
+--      putStrLn "JustCase"
+--      ioref <- newIORef  FMIT.FMIComponent {fcVars = T.sSVs s, fcDoStep = T.sDoStepFunc s,
+--                                         fcEndTime = Nothing, fcState = FMIT.Instantiated, fcPeriod = T.sPeriod s, fcRemTime = T.sPeriod s, fcUserState = T.sUserState s}
+--      newStablePtr ioref
+
 
 {- |
 Defines the end time.

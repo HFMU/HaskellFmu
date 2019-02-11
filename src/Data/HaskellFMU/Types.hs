@@ -1,4 +1,4 @@
-module Data.HFMU.Types where
+module Data.HaskellFMU.Types where
 import qualified Data.HashMap.Strict as HM
 
 data SVType = Real | Integer | String | Boolean deriving (Show)

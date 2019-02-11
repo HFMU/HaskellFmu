@@ -1,6 +1,6 @@
 module HMOperations where
 
-import Data.HFMU.Types
+import Data.HaskellFMU.Types
 import qualified Data.HashMap.Strict as HM
 
 adjustPortVal :: SVs -> String -> SVTypeVal -> SVs

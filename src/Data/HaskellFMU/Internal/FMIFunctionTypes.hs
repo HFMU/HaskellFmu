@@ -1,8 +1,8 @@
-module Data.HFMU.Internal.FMIFunctionTypes where
+module Data.HaskellFMU.Internal.FMIFunctionTypes where
 
 import Foreign (Ptr)
 import Foreign.C.Types (CInt, CUInt, CBool, CDouble, CSize)
-import Data.HFMU.Internal.FMITypes
+import Data.HaskellFMU.Internal.FMITypes
 
 type FMISetupExperimentType a = FMUStateType a -> CBool -> CDouble -> CDouble -> CBool -> CDouble -> FMIFuncReturn
 
