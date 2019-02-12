@@ -7,6 +7,7 @@ import Foreign.C.Types
 import Foreign
 import Data.IORef
 import Control.Monad
+import Control.Applicative
 import System.IO.Unsafe
 import qualified Data.HashMap.Strict as HM
 import Data.List
@@ -53,25 +54,31 @@ reportFatal state = (state {FMIT.fcState = FMIT.ERROR}, T.Fatal)
 First call to the FMU.
 Changed state to "Instantiated".
 Returns a pointer to the state. The same pointer must be used subsequently.
+fmi2String instanceName, fmi2Type fmuType, fmi2String fmuGUID, fmi2String fmuResourceLocation, constfmi2CallbackFunctions* functions, fmi2Boolean visible, fmi2Boolean loggingOn
 -}
 foreign export ccall fmi2Instantiatee :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
 fmi2Instantiatee :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
-fmi2Instantiatee _ _ _ _ ptrCbFuncs _ _ = do
+fmi2Instantiatee _ _ guid _ ptrCbFuncs _ _ = do
   -- Extract callback functions
   (cbFuncs :: FMIT.CallbackFunctions) <- peek ptrCbFuncs
   -- Create a test log message
-  instanceName :: CString <- newCString "instanceName";
-  category :: CString <- newCString "logError";
-  msg :: CString <- newCString "HS-Message: Error";
+  instanceName :: CString <- newCString "instanceName"
+  category :: CString <- newCString "logError"
+  msg :: CString <- newCString "HS-Message: Error"
   (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category msg
   state <- getSetupImpure setupVar
   case state of
     Nothing -> putStrLn "NothingCase" >> (newStablePtr =<< newIORef FMIT.FMIComponent {}) -- ERROR SHOULD BE THROWN
-    Just s -> do
-      putStrLn "JustCase"
-      ioref <- newIORef  FMIT.FMIComponent {fcVars = T.sSVs s, fcDoStep = T.sDoStepFunc s,
+    Just s ->
+      let retPtr = do
+            ioref <- newIORef  FMIT.FMIComponent {fcVars = T.sSVs s, fcDoStep = T.sDoStepFunc s,
                                          fcEndTime = Nothing, fcState = FMIT.Instantiated, fcPeriod = T.sPeriod s, fcRemTime = T.sPeriod s, fcUserState = T.sUserState s}
-      newStablePtr ioref
+            newStablePtr ioref in
+
+        do
+          guid' <- peekCString guid
+          when (T.sGuid s /= guid') . (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category <$> newCString "Invalid GUID"
+          retPtr
 
 --foreign export ccall fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
 --fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))

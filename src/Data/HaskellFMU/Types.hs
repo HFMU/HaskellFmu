@@ -28,7 +28,8 @@ type DoStepFunType a = SVs -> UserState a -> IO (DoStepResult a)
 data Setup a = Setup {sSVs :: SVs,
                    sDoStepFunc :: DoStepFunType a,
                    sPeriod :: Double,
-                   sUserState :: UserState a}
+                   sUserState :: UserState a,
+                   sGuid :: String}
 
 type Period = Double
 type EndTime = Double
