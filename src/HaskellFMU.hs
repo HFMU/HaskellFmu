@@ -135,7 +135,7 @@ fmi2ExitInitializationMode comp =
 
 exitInitializationMode :: FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)
 exitInitializationMode state =
-  if FMIT.fcState state == FMIT.Instantiated
+  if FMIT.fcState state == FMIT.InitializationMode
   then (state {FMIT.fcState = FMIT.SlaveInitialized}, T.OK)
   else reportFatal state
 
