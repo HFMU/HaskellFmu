@@ -28,7 +28,7 @@ It extracts the state from 'comp' and applies 'f' to it.
 -}
 firstFunction :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status)) -> IO CInt
 firstFunction comp f =
-  firstFunctionIO comp (\x -> return $ f x)
+  firstFunctionIO comp $ return . f
 
 firstFunctionIO :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status))) -> IO CInt
 firstFunctionIO comp f = do
