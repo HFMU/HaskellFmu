@@ -69,7 +69,7 @@ library
   other-extensions:    DeriveGeneric, ScopedTypeVariables, DuplicateRecordFields
 
   -- Other library packages from which modules are imported.
-  build-depends:       base, unordered-containers
+  build-depends:       base, unordered-containers, mtl
 
   -- Directories containing source files.
   hs-source-dirs:      src

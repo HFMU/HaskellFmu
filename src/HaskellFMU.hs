@@ -16,7 +16,7 @@ import qualified Data.HaskellFMU.Types as T
 import qualified Data.HaskellFMU.Internal.FMITypes as FMIT
 import qualified Data.HaskellFMU.Internal.FMIFunctionTypes as FMIFT
 import Data.Maybe
-
+import qualified Control.Monad.Writer as W
 
 foreign import ccall "dynamic" mkFunPtrLogger :: FMIT.CallbackLogger -> FMIT.CompEnvT -> CString -> FMIT.FMIStatus -> CString -> CString -> IO ()
 
@@ -26,17 +26,18 @@ It extracts the state from 'comp' and applies 'f' to it.
 'f' returns a tuple of state and status.
 'comp' is updated with the new state and the status is converted to a 'CInt'
 -}
-firstFunction :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)) -> IO CInt
-firstFunction comp f = do
-  state <- getStateImpure comp
-  let (state', status) = f state in
-    writeState comp state' >> (pure . FMIT.statusToCInt) status
+firstFunction :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status)) -> IO CInt
+firstFunction comp f =
+  firstFunctionIO comp (\x -> return $ f x)
 
-firstFunctionIO :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> IO (FMIT.FMIComponent a, T.Status)) -> IO CInt
+firstFunctionIO :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status))) -> IO CInt
 firstFunctionIO comp f = do
   state <- getStateImpure comp
-  (state', status) <- f state
-  writeState comp state' >> (pure . FMIT.statusToCInt) status
+  w <- f state
+  firstFunctionWriteState comp $ fst . W.runWriter $ w
+
+firstFunctionWriteState :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a, T.Status) -> IO CInt
+firstFunctionWriteState comp (state, status) = writeState comp state >> (pure . FMIT.statusToCInt) status
 
 writeState :: StablePtr (IORef a) -> a -> IO ()
 writeState ptr state = do
@@ -107,7 +108,7 @@ Does not alter FMU state.
 foreign export ccall fmi2SetupExperiment :: FMIFT.FMISetupExperimentType a
 fmi2SetupExperiment :: FMIFT.FMISetupExperimentType a
 fmi2SetupExperiment comp _ _ _ _ stopTime =
-  let f state = (state {FMIT.fcEndTime = Just $ realToFrac stopTime}, T.OK) in
+  let f state = return (state {FMIT.fcEndTime = Just $ realToFrac stopTime}, T.OK) in
     firstFunction comp f
 
 
@@ -119,11 +120,15 @@ fmi2EnterInitializationMode :: FMIFT.FMIEnterInitializationModeType a
 fmi2EnterInitializationMode comp =
   firstFunction comp enterInitializationMode
 
-enterInitializationMode :: FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)
+enterInitializationMode :: FMIT.FMIComponent a -> W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status)
 enterInitializationMode state =
   if FMIT.fcState state == FMIT.Instantiated && (isJust . FMIT.fcEndTime) state
-  then (state {FMIT.fcState = FMIT.InitializationMode}, T.OK)
-  else reportFatal state
+  then
+      return (state {FMIT.fcState = FMIT.InitializationMode}, T.OK)
+  else
+    do
+      W.tell $ [T.LogEntry T.LogError "FMU not instantiated or End Time not defined."]
+      return $ reportFatal state
     
 {- |
 Changes state to slaveInitialized
@@ -133,11 +138,14 @@ fmi2ExitInitializationMode :: FMIFT.FMIExitInitializationModeType a
 fmi2ExitInitializationMode comp = 
   firstFunction comp exitInitializationMode
 
-exitInitializationMode :: FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)
+exitInitializationMode :: FMIT.FMIComponent a -> W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status)
 exitInitializationMode state =
   if FMIT.fcState state == FMIT.InitializationMode
-  then (state {FMIT.fcState = FMIT.SlaveInitialized}, T.OK)
-  else reportFatal state
+  then return (state {FMIT.fcState = FMIT.SlaveInitialized}, T.OK)
+  else
+    do
+      W.tell [T.LogEntry T.LogError "FMU not in Initialization Mode."]
+      return $ reportFatal state
 
 {- |
 Changes state to terminated
@@ -147,11 +155,13 @@ fmi2Terminate :: FMIFT.FMITerminateType a
 fmi2Terminate comp =
   firstFunction comp terminate
 
-terminate :: FMIT.FMIComponent a -> (FMIT.FMIComponent a, T.Status)
+terminate :: FMIT.FMIComponent a -> W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status)
 terminate state =
   if FMIT.fcState state == FMIT.SlaveInitialized
-  then (state {FMIT.fcState = FMIT.Terminated}, T.OK)
-  else reportFatal state
+  then return (state {FMIT.fcState = FMIT.Terminated}, T.OK)
+  else do
+    W.tell [T.LogEntry T.LogError "FMU not in SlaveInitialized state."]
+    return $ reportFatal state
 
 {- |
 Final call.
@@ -184,7 +194,7 @@ fmi2SetReal comp varRefs size varVals =
   let f state = setLogicImpure state varRefs size varVals (T.RealVal . realToFrac) in
     firstFunctionIO comp f
 
-setLogicImpure :: Storable b => FMIT.FMIComponent a -> Ptr CUInt -> CSize -> Ptr b -> (b -> T.SVTypeVal) -> IO (FMIT.FMIComponent a, T.Status)
+setLogicImpure :: Storable b => FMIT.FMIComponent a -> Ptr CUInt -> CSize -> Ptr b -> (b -> T.SVTypeVal) -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status))
 setLogicImpure state refs size vals valConvF =
   do
     refs' :: [Int] <- map fromIntegral <$> peekArray (fromIntegral size) refs
@@ -192,12 +202,12 @@ setLogicImpure state refs size vals valConvF =
     return $ setLogic state refs' vals'
 
 
-setLogic :: FMIT.FMIComponent a -> [Int] -> [T.SVTypeVal] -> (FMIT.FMIComponent a,T.Status)
+setLogic :: FMIT.FMIComponent a -> [Int] -> [T.SVTypeVal] -> W.Writer [T.LogEntry] (FMIT.FMIComponent a,T.Status)
 setLogic state@FMIT.FMIComponent {fcVars = vs} vRefs vVals =
   let
     refVals = zip vRefs vVals
     ys' = foldr updateVal vs refVals in
-    (state {FMIT.fcVars = ys'}, T.OK)
+    return (state {FMIT.fcVars = ys'}, T.OK)
   where
     updateVal :: (Int, T.SVTypeVal) -> T.SVs -> T.SVs
     updateVal (valRef, valVal) hm = HM.map updateValWithValRef hm

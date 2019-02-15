@@ -19,6 +19,8 @@ type SVs = HM.HashMap String SV
 
 data Status = OK | Warning | Discard | Error | Fatal | Pending deriving (Enum, Show, Eq)
 
+data LogType = LogInfo | LogWarning | LogError 
+
 newtype UserState x = UserState x
 
 data DoStepResult x = DoStepResult {dsrStatus :: Status, dsrSvs :: SVs, dsrState :: UserState x }
@@ -35,3 +37,5 @@ type Period = Double
 type EndTime = Double
 type CommunicationStepSize = Double
 type CurrentCommunicationPoint = Double
+
+data LogEntry = LogEntry LogType String
