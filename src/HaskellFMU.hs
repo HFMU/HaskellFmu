@@ -227,8 +227,10 @@ fmi2GetBoolean comp varRefs size varVals =
   let valToCBool (x :: T.SVTypeVal) =
         case x of
           T.BooleanVal b -> Just . fromBool $ b
-          _ -> Nothing in
-    getLogicImpure comp varRefs size varVals valToCBool
+          _ -> Nothing
+      f state = getLogicImpure state varRefs size varVals valToCBool
+  in
+    firstFunctionIO comp f
 
 foreign export ccall fmi2GetReal :: FMIFT.FMIGetRealType a
 fmi2GetReal :: FMIFT.FMIGetRealType a
@@ -236,19 +238,20 @@ fmi2GetReal comp varRefs size varVals =
   let valToCDouble (x :: T.SVTypeVal) =
         case x of
           T.RealVal b -> Just . realToFrac $ b
-          _ -> Nothing in
-    getLogicImpure comp varRefs size varVals valToCDouble
+          _ -> Nothing
+      f state = getLogicImpure state varRefs size varVals valToCDouble
+  in
+    firstFunctionIO comp f
 
 
 
-getLogicImpure :: Storable a => FMIT.FMUStateType b -> Ptr CUInt -> CSize -> Ptr a -> (T.SVTypeVal -> Maybe a) -> IO CInt
-getLogicImpure comp varRefs size varVals toVarValF = do
-  state <- getStateImpure comp
+getLogicImpure :: Storable b => FMIT.FMIComponent a -> Ptr CUInt -> CSize -> Ptr b -> (T.SVTypeVal -> Maybe b) -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a,T.Status))
+getLogicImpure state varRefs size varVals toVarValF = do
   varRefs' :: [CUInt] <- peekArray (fromIntegral size) varRefs
   let (values,status) = getLogic state (map fromIntegral varRefs') toVarValF in
     case values of
-      Nothing -> pure . FMIT.statusToCInt $ status
-      Just values' -> pokeArray varVals values' >> (pure . FMIT.statusToCInt) status
+      Nothing -> return . return $ (state, status)
+      Just values' -> pokeArray varVals values' >> (return . return $ (state, status))
 
 getLogic :: FMIT.FMIComponent b -> [Int] -> (T.SVTypeVal -> Maybe a) -> (Maybe [a],T.Status )
 getLogic state vRefs valConvF =
