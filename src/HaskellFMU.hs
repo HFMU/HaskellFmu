@@ -17,6 +17,7 @@ import qualified Data.HaskellFMU.Internal.FMITypes as FMIT
 import qualified Data.HaskellFMU.Internal.FMIFunctionTypes as FMIFT
 import Data.Maybe
 import qualified Control.Monad.Writer as W
+import Data.Foldable
 
 foreign import ccall "dynamic" mkFunPtrLogger :: FMIT.CallbackLogger -> FMIT.CompEnvT -> CString -> FMIT.FMIStatus -> CString -> CString -> IO ()
 
@@ -52,10 +53,8 @@ reportFatal state = (state {FMIT.fcState = FMIT.ERROR}, T.Fatal)
 -- =================== STATE CHANGE FUNCTIONS ===================
 -- ==============================================================
 {- |
-First call to the FMU.
-Changed state to "Instantiated".
-Returns a pointer to the state. The same pointer must be used subsequently.
-fmi2String instanceName, fmi2Type fmuType, fmi2String fmuGUID, fmi2String fmuResourceLocation, constfmi2CallbackFunctions* functions, fmi2Boolean visible, fmi2Boolean loggingOn
+Returns a pointer to the state.
+C type signature: fmi2String instanceName, fmi2Type fmuType, fmi2String fmuGUID, fmi2String fmuResourceLocation, constfmi2CallbackFunctions* functions, fmi2Boolean visible, fmi2Boolean loggingOn
 -}
 foreign export ccall fmi2Instantiatee :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
 fmi2Instantiatee :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
@@ -81,29 +80,8 @@ fmi2Instantiatee _ _ guid _ ptrCbFuncs _ _ = do
           when (T.sGuid s /= guid') . (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category <$> newCString "Invalid GUID"
           retPtr
 
---foreign export ccall fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
---fmi2Instantiate :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
---fmi2Instantiate _ _ _ _ ptrCbFuncs _ _ = do
---  -- Extract callback functions
---  (cbFuncs :: FMIT.CallbackFunctions) <- peek ptrCbFuncs
---  -- Create a test log message
---  instanceName :: CString <- newCString "instanceName";
---  category :: CString <- newCString "logError";
---  msg :: CString <- newCString "HS-Message: Error";
---  (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category msg
---  state <- getSetupImpure setupVar
---  case state of
---    Nothing -> putStrLn "NothingCase" >> (newStablePtr =<< newIORef FMIT.FMIComponent {}) -- ERROR SHOULD BE THROWN
---    Just s -> do
---      putStrLn "JustCase"
---      ioref <- newIORef  FMIT.FMIComponent {fcVars = T.sSVs s, fcDoStep = T.sDoStepFunc s,
---                                         fcEndTime = Nothing, fcState = FMIT.Instantiated, fcPeriod = T.sPeriod s, fcRemTime = T.sPeriod s, fcUserState = T.sUserState s}
---      newStablePtr ioref
-
-
 {- |
 Defines the end time.
-Does not alter FMU state.
 -}
 foreign export ccall fmi2SetupExperiment :: FMIFT.FMISetupExperimentType a
 fmi2SetupExperiment :: FMIFT.FMISetupExperimentType a
@@ -127,7 +105,7 @@ enterInitializationMode state =
       return (state {FMIT.fcState = FMIT.InitializationMode}, T.OK)
   else
     do
-      W.tell $ [T.LogEntry T.LogError "FMU not instantiated or End Time not defined."]
+      W.tell [T.LogEntry T.LogError "FMU not instantiated or End Time not defined."]
       return $ reportFatal state
     
 {- |
@@ -164,7 +142,6 @@ terminate state =
     return $ reportFatal state
 
 {- |
-Final call.
 Releases state.
 -}
 foreign export ccall fmi2FreeInstance :: FMIFT.FMIFreeInstanceType a
@@ -177,7 +154,7 @@ fmi2FreeInstance comp = do
 -- =================== SET FUNCTIONS ============================
 -- ==============================================================
 {- |
-FFI function to set an integer
+Sets integer inputs
 -}
 foreign export ccall fmi2SetInteger :: FMIFT.FMISetIntegerType a
 fmi2SetInteger :: FMIFT.FMISetIntegerType a
@@ -248,18 +225,22 @@ fmi2GetReal comp varRefs size varVals =
 getLogicImpure :: Storable b => FMIT.FMIComponent a -> Ptr CUInt -> CSize -> Ptr b -> (T.SVTypeVal -> Maybe b) -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a,T.Status))
 getLogicImpure state varRefs size varVals toVarValF = do
   varRefs' :: [CUInt] <- peekArray (fromIntegral size) varRefs
-  let (values,status) = getLogic state (map fromIntegral varRefs') toVarValF in
-    case values of
-      Nothing -> return . return $ (state, status)
-      Just values' -> pokeArray varVals values' >> (return . return $ (state, status))
+  let ((values,status),log) = W.runWriter $ getLogic state (map fromIntegral varRefs') toVarValF
+  traverse_ (pokeArray varVals) values
+  return $ do
+    W.tell log
+    return (state,status)
 
-getLogic :: FMIT.FMIComponent b -> [Int] -> (T.SVTypeVal -> Maybe a) -> (Maybe [a],T.Status )
+getLogic :: FMIT.FMIComponent b -> [Int] -> (T.SVTypeVal -> Maybe a) -> W.Writer [T.LogEntry] (Maybe [a],T.Status )
 getLogic state vRefs valConvF =
   let outputSVs = HM.elems . FMIT.fcVars $ state
       values = getVsFromVRefs outputSVs vRefs valConvF in
     case values of
-      Nothing -> (Nothing, T.Fatal)
-      x -> (x, T.OK)
+      Nothing ->
+        do
+          W.tell $ [T.LogEntry T.LogWarning "Could not find variables to get"]
+          return (Nothing, T.Fatal)
+      x -> return (x, T.OK)
 
 getVsFromVRefs :: [T.SV] -> [Int] -> (T.SVTypeVal -> Maybe a) -> Maybe [a]
 getVsFromVRefs ps refs f = traverse (\x -> f =<< findValWithRef x ps) refs
@@ -281,32 +262,45 @@ getVsFromVRefs ps refs f = traverse (\x -> f =<< findValWithRef x ps) refs
 foreign export ccall fmi2DoStep :: FMIFT.FMIDoStepType a
 fmi2DoStep :: FMIFT.FMIDoStepType a
 fmi2DoStep comp ccp css ns =
-  do
-    state <- getStateImpure comp
-    let
+  let
       css' = realToFrac css
-      ccp' = realToFrac ccp in
-      do
-        (state', status) <- doStepLogic state ccp' css' (toBool ns)
+      ccp' = realToFrac ccp
+      f state = do
+        w <- doStepLogic state ccp' css' (toBool ns)
+        let ((state',status),log) =  W.runWriter $ w
         case status of
-          T.OK -> writeStateImpure comp state' >> (pure . FMIT.statusToCInt) T.OK
-          _ -> (pure . FMIT.statusToCInt) status
+          T.OK -> return $ return (state', T.OK)--writeStateImpure comp state' >> (pure . FMIT.statusToCInt) T.OK
+          _ -> return $ return (state, status)
 
+  in
+    firstFunctionIO comp f
 
-doStepLogic :: FMIT.FMIComponent a -> T.CurrentCommunicationPoint -> T.CommunicationStepSize -> Bool -> IO (FMIT.FMIComponent a,T.Status)
+-- Applies calcDoStep IF
+-- /\ end time is defined
+-- /\ current communication point + communication step size <= endTime
+doStepLogic :: FMIT.FMIComponent a -> T.CurrentCommunicationPoint -> T.CommunicationStepSize -> Bool -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a,T.Status))
 doStepLogic state ccp css ns =
   case FMIT.fcEndTime state of
-    Nothing -> return (state, T.Fatal)
+    Nothing -> return $ do
+      W.tell [T.LogEntry T.LogError "End time has not been defined"]
+      return (state, T.Fatal)
     Just endTime ->
       if ccp + css > endTime
-      then return (state, T.Fatal)
+      then return $ do
+        W.tell [T.LogEntry T.LogError "Step size exceeds the defined end time"]
+        return (state, T.Fatal)
       else
         do
           RDS {remTime = rt, vars = vs, status = st, rdsState = rdsS } <- calcDoStep (FMIT.fcDoStep state) (FMIT.fcVars state) (FMIT.fcPeriod state) (FMIT.fcRemTime state) css (FMIT.fcUserState state)
-          return (state {FMIT.fcRemTime = rt, FMIT.fcVars=vs, FMIT.fcUserState=rdsS},st)
+          return $ return (state {FMIT.fcRemTime = rt, FMIT.fcVars=vs, FMIT.fcUserState=rdsS},st)
 
+
+-- Type representing the Result of Do Steps
 data RDS a = RDS {remTime :: Double, vars :: T.SVs, status ::T.Status, rdsState :: T.UserState a}
 
+-- Recursively applies DoStep UNTIL
+-- \/ communication step size < remaining time
+-- \/ doStep returns status != OK
 calcDoStep :: T.DoStepFunType a -> T.SVs -> T.Period -> Double -> T.CommunicationStepSize -> T.UserState a -> IO (RDS a)
 calcDoStep doStepF svs period remTime css us
   | css < remTime = return RDS {remTime = remTime - css, vars = svs, status = T.OK, rdsState = us}
