@@ -19,6 +19,7 @@ import qualified Data.HaskellFMU.Internal.FMIFunctionTypes as FMIFT
 import Data.Maybe
 import qualified Control.Monad.Writer as W
 import Data.Foldable
+import qualified Data.Tuple.Sequence as TupSeq
 
 foreign import ccall "dynamic" mkFunPtrLogger :: FMIT.CallbackLogger -> FMIT.CompEnvT -> CString -> FMIT.FMIStatus -> CString -> CString -> IO ()
 
@@ -28,17 +29,17 @@ It extracts the state from 'comp' and applies 'f' to it.
 'f' returns a tuple of state and status.
 'comp' is updated with the new state and the status is converted to a 'CInt'
 -}
-firstFunction :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status)) -> IO CInt
+firstFunction :: StablePtr (IORef (FMIT.FMIComponent a)) -> (FMIT.FMIComponent a -> W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status)) -> IO CInt
 firstFunction comp f =
   firstFunctionIO comp $ return . f
 
-firstFunctionIO :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status))) -> IO CInt
+firstFunctionIO :: StablePtr (IORef (FMIT.FMIComponent a)) -> (FMIT.FMIComponent a -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status))) -> IO CInt
 firstFunctionIO comp f = do
   state <- getStateImpure comp
   w <- f state
   firstFunctionWriteState comp $ fst . W.runWriter $ w
 
-firstFunctionWriteState :: (StablePtr (IORef (FMIT.FMIComponent a))) -> (FMIT.FMIComponent a, T.Status) -> IO CInt
+firstFunctionWriteState :: StablePtr (IORef (FMIT.FMIComponent a)) -> (FMIT.FMIComponent a, T.Status) -> IO CInt
 firstFunctionWriteState comp (state, status) = writeState comp state >> (pure . FMIT.statusToCInt) status
 
 writeState :: StablePtr (IORef a) -> a -> IO ()
@@ -301,7 +302,6 @@ fmi2DoStep comp ccp css ns =
         case status of
           T.OK -> return $ return (state', T.OK)--writeStateImpure comp state' >> (pure . FMIT.statusToCInt) T.OK
           _ -> return $ return (state, status)
-
   in
     firstFunctionIO comp f
 
@@ -353,11 +353,7 @@ calcDoStep doStepF svs period remTime css us
 mFunc :: Monoid l => l -> IO (W.Writer l r) -> IO (W.Writer l r)
 mFunc l iw = do
   (res, iwLog ) <- W.runWriter <$> iw
-  return $ W.tell l >> W.tell iwLog >> return res
-
-
-
-
+  return $ W.writer (res, l <> iwLog)
 
 
 -- ==============================================================
@@ -409,3 +405,27 @@ updateState c s = c {FMIT.fcState = s}
 updateInputs :: FMIT.FMIComponent a -> T.SVs -> FMIT.FMIComponent a
 updateInputs c i = c {FMIT.fcVars = i}
 
+--foreign import ccall "dynamic" mkFunPtrLogger :: FMIT.CallbackLogger -> FMIT.CompEnvT -> CString -> FMIT.FMIStatus -> CString -> CString -> IO ()
+
+performCallback :: String -> T.LogEntry -> FMIT.CallbackLogger -> IO ()
+performCallback name l fLog = do
+  (cat,msg) <- convertLogEntryToCBData l
+  name' <- newCString name
+  mkFunPtrLogger fLog nullPtr name' (CInt 3) cat msg
+
+type LogCategory = CString
+type LogMsg = CString
+
+-- pp 42 in fmi standard.
+convertLogEntryToCBData :: T.LogEntry -> IO (LogCategory, LogMsg)
+convertLogEntryToCBData (T.LogEntry T.LogInfo msg) = convLogEntryToCBData' ("logAll", msg)
+convertLogEntryToCBData (T.LogEntry T.LogWarning msg) = convLogEntryToCBData' ("logStatusWarning", msg)
+convertLogEntryToCBData (T.LogEntry T.LogError msg) = convLogEntryToCBData' ("logStatusError", msg)
+
+convLogEntryToCBData' :: (String, String) -> IO (LogCategory, LogMsg)
+convLogEntryToCBData' (x,y) = TupSeq.sequenceT (newCString x, newCString y)
+
+logTypeToCInt :: T.LogEntry -> CInt
+logTypeToCInt (T.LogEntry T.LogInfo _) = FMIT.statusToCInt T.OK
+logTypeToCInt (T.LogEntry T.LogWarning _) = FMIT.statusToCInt T.Warning
+logTypeToCInt (T.LogEntry T.LogError _) = FMIT.statusToCInt T.Fatal
