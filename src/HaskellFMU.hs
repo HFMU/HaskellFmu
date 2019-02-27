@@ -10,6 +10,7 @@ import Control.Monad
 import Control.Applicative
 import System.IO.Unsafe
 import qualified Data.HashMap.Strict as HM
+import qualified Data.IntMap.Strict as IM
 import Data.List
 import Debug.Trace
 import qualified Data.HaskellFMU.Types as T
@@ -68,10 +69,13 @@ fmi2Instantiatee _ _ guid _ ptrCbFuncs _ _ = do
   (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category msg
   state <- getSetupImpure setupVar
   case state of
-    Nothing -> putStrLn "NothingCase" >> (newStablePtr =<< newIORef FMIT.FMIComponent {}) -- ERROR SHOULD BE THROWN
+    Nothing -> putStrLn "NothingCase" >> (return . castPtrToStablePtr) nullPtr--(newStablePtr =<< newIORef FMIT.FMIComponent {fcState = }) -- ERROR SHOULD BE THROWN
     Just s ->
-      let retPtr = do
-            ioref <- newIORef  FMIT.FMIComponent {fcVars = T.sSVs s, fcDoStep = T.sDoStepFunc s,
+      let
+        nameSvMap = T.sSVs s
+        vRefNameMap = calcVRefNameMap nameSvMap
+        retPtr = do
+            ioref <- newIORef  FMIT.FMIComponent {fcVars = nameSvMap, fcVRefNameMap = vRefNameMap, fcDoStep = T.sDoStepFunc s,
                                          fcEndTime = Nothing, fcState = FMIT.Instantiated, fcPeriod = T.sPeriod s, fcRemTime = T.sPeriod s, fcUserState = T.sUserState s}
             newStablePtr ioref in
 
@@ -79,6 +83,11 @@ fmi2Instantiatee _ _ guid _ ptrCbFuncs _ _ = do
           guid' <- peekCString guid
           when (T.sGuid s /= guid') . (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category <$> newCString "Invalid GUID"
           retPtr
+
+{- |
+Converts a HashMap String -> ScalarVariable to -}
+calcVRefNameMap :: T.SVs -> FMIT.VRefNameMap
+calcVRefNameMap xs = HM.foldrWithKey (\k v acc -> IM.insert (T.svRef v) k acc) IM.empty xs 
 
 {- |
 Defines the end time.
@@ -153,6 +162,17 @@ fmi2FreeInstance comp = do
 -- ==============================================================
 -- =================== SET FUNCTIONS ============================
 -- ==============================================================
+
+{- |
+Sets boolean inputs
+-}
+
+foreign export ccall fmi2SetBoolean :: FMIFT.FMISetBooleanType a
+fmi2SetBoolean :: FMIFT.FMISetBooleanType a
+fmi2SetBoolean comp varRefs size varVals =
+  let f state = setLogicImpure state varRefs size varVals (T.BooleanVal . toBool) in
+    firstFunctionIO comp f
+
 {- |
 Sets integer inputs
 -}
@@ -217,6 +237,16 @@ fmi2GetReal comp varRefs size varVals =
           T.RealVal b -> Just . realToFrac $ b
           _ -> Nothing
       f state = getLogicImpure state varRefs size varVals valToCDouble
+  in
+    firstFunctionIO comp f
+
+foreign export ccall fmi2GetInteger :: FMIFT.FMIGetIntegerType a
+fmi2GetInteger comp varRefs size varVals =
+  let valToCBool (x :: T.SVTypeVal) =
+        case x of
+          T.IntegerVal b -> Just . (fromInteger . toInteger) $ b
+          _ -> Nothing
+      f state = getLogicImpure state varRefs size varVals valToCBool
   in
     firstFunctionIO comp f
 
@@ -291,8 +321,15 @@ doStepLogic state ccp css ns =
         return (state, T.Fatal)
       else
         do
-          RDS {remTime = rt, vars = vs, status = st, rdsState = rdsS } <- calcDoStep (FMIT.fcDoStep state) (FMIT.fcVars state) (FMIT.fcPeriod state) (FMIT.fcRemTime state) css (FMIT.fcUserState state)
-          return $ return (state {FMIT.fcRemTime = rt, FMIT.fcVars=vs, FMIT.fcUserState=rdsS},st)
+          w <- calcDoStep (FMIT.fcDoStep state) (FMIT.fcVars state) (FMIT.fcPeriod state) (FMIT.fcRemTime state) css (FMIT.fcUserState state)
+          let (RDS {remTime = rt, vars = vs, status = st, rdsState = rdsS }, log) = W.runWriter w
+          return $
+            do
+              W.tell log
+              return (state {FMIT.fcRemTime = rt, FMIT.fcVars=vs, FMIT.fcUserState=rdsS},st)
+--          RDS {remTime = rt, vars = vs, status = st, rdsState = rdsS } <- calcDoStep (FMIT.fcDoStep state) (FMIT.fcVars state) (FMIT.fcPeriod state) (FMIT.fcRemTime state) css (FMIT.fcUserState state)
+
+--          return $ return (state {FMIT.fcRemTime = rt, FMIT.fcVars=vs, FMIT.fcUserState=rdsS},st)
 
 
 -- Type representing the Result of Do Steps
@@ -301,14 +338,27 @@ data RDS a = RDS {remTime :: Double, vars :: T.SVs, status ::T.Status, rdsState 
 -- Recursively applies DoStep UNTIL
 -- \/ communication step size < remaining time
 -- \/ doStep returns status != OK
-calcDoStep :: T.DoStepFunType a -> T.SVs -> T.Period -> Double -> T.CommunicationStepSize -> T.UserState a -> IO (RDS a)
+-- TODO: Writer log is not appended in T.OK case
+calcDoStep :: T.DoStepFunType a -> T.SVs -> T.Period -> Double -> T.CommunicationStepSize -> T.UserState a -> IO (W.Writer [T.LogEntry] (RDS a))
 calcDoStep doStepF svs period remTime css us
-  | css < remTime = return RDS {remTime = remTime - css, vars = svs, status = T.OK, rdsState = us}
+  | css < remTime = return $
+    return RDS {remTime = remTime - css, vars = svs, status = T.OK, rdsState = us}
   | otherwise = do
-      T.DoStepResult {T.dsrStatus = st, T.dsrSvs = svs', T.dsrState = sta} <- doStepF svs us
-      case st of
-        T.OK -> calcDoStep doStepF svs' period period (css-remTime) sta
-        _ -> return RDS {remTime = remTime, vars=svs', status=st, rdsState=sta}
+     (T.DoStepResult {T.dsrStatus = st, T.dsrSvs = svs', T.dsrState = sta}, log) <- W.runWriter <$> doStepF svs us
+     mFunc log $
+       case st of
+         T.OK ->  calcDoStep doStepF svs' period period (css-remTime) sta
+         _ ->  (return . return) $ RDS {remTime = remTime, vars=svs', status=st, rdsState=sta}
+
+mFunc :: Monoid l => l -> IO (W.Writer l r) -> IO (W.Writer l r)
+mFunc l iw = do
+  (res, iwLog ) <- W.runWriter <$> iw
+  return $ W.tell l >> W.tell iwLog >> return res
+
+
+
+
+
 
 -- ==============================================================
 -- =================== SETUP FUNCTIONs ==========================

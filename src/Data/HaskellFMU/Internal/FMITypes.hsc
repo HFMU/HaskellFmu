@@ -7,6 +7,8 @@ import Foreign (StablePtr, FunPtr, Ptr, nullPtr)
 import Data.IORef
 import Foreign.Storable
 import Control.Monad (ap)
+import qualified Data.HashMap.Strict as HM
+import qualified Data.IntMap.Strict as IM
 
 statusToCInt :: T.Status -> CInt
 statusToCInt = fromIntegral . fromEnum
@@ -24,7 +26,10 @@ type FMUStateType a = StablePtr (IORef (FMIComponent a))
 
 type FMIFuncReturn = IO CInt
 
+type VRefNameMap = IM.IntMap String
+
 data FMIComponent x = FMIComponent {fcVars :: T.SVs,
+                                    fcVRefNameMap :: VRefNameMap,
                                   fcDoStep :: T.DoStepFunType x,
                                   fcEndTime :: Maybe Double,
                                   fcState :: FMUState,

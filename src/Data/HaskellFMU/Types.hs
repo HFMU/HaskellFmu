@@ -1,5 +1,6 @@
 module Data.HaskellFMU.Types where
 import qualified Data.HashMap.Strict as HM
+import qualified Control.Monad.Writer as W
 
 data SVType = Real | Integer | String | Boolean deriving (Show)
 data SVTypeVal = RealVal Double | IntegerVal Int | StringVal String | BooleanVal Bool deriving (Show)
@@ -25,7 +26,7 @@ newtype UserState x = UserState x
 
 data DoStepResult x = DoStepResult {dsrStatus :: Status, dsrSvs :: SVs, dsrState :: UserState x }
 
-type DoStepFunType a = SVs -> UserState a -> IO (DoStepResult a)
+type DoStepFunType a = SVs -> UserState a -> IO (W.Writer [LogEntry] (DoStepResult a))
 
 data Setup a = Setup {sSVs :: SVs,
                    sDoStepFunc :: DoStepFunType a,

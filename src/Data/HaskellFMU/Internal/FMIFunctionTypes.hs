@@ -14,6 +14,8 @@ type FMITerminateType a = FMUStateType a -> FMIFuncReturn
 
 type FMIFreeInstanceType a = FMUStateType a -> FMIFuncReturn
 
+type FMISetBooleanType a = FMUStateType a -> Ptr CUInt -> CSize -> Ptr CInt -> FMIFuncReturn
+
 type FMISetIntegerType a = FMUStateType a -> Ptr CUInt -> CSize -> Ptr CInt -> FMIFuncReturn
 
 type FMISetRealType a = FMUStateType a -> Ptr CUInt -> CSize -> Ptr CDouble -> FMIFuncReturn
@@ -21,5 +23,8 @@ type FMISetRealType a = FMUStateType a -> Ptr CUInt -> CSize -> Ptr CDouble -> F
 type FMIGetBooleanType a = FMUStateType a -> Ptr CUInt -> CSize -> Ptr CInt -> FMIFuncReturn
 
 type FMIGetRealType a = FMUStateType a -> Ptr CUInt -> CSize -> Ptr CDouble -> FMIFuncReturn
+
+type FMIGetIntegerType a = FMUStateType a -> Ptr CUInt -> CSize -> Ptr CInt -> FMIFuncReturn
+
 
 type FMIDoStepType a = FMUStateType a -> CDouble -> CDouble -> CBool -> FMIFuncReturn
