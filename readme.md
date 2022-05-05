@@ -1,5 +1,6 @@
 # HaskellFMU
 The Haskell FMU is a library that enables FMU development in Haskell.
+This is the raw version and forwards most requests directly.
 
 # Development Environment
 This requires GHC 8.10.7 due to the following error:

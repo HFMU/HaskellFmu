@@ -20,9 +20,10 @@ import Data.Maybe
 import qualified Control.Monad.Writer as W
 import Data.Foldable
 import qualified Data.Tuple.Sequence as TupSeq
+import LogFunctions
 
-foreign import ccall "dynamic" mkFunPtrLogger :: FMIT.CallbackLogger -> FMIT.CompEnvT -> CString -> FMIT.FMIStatus -> CString -> CString -> IO ()
 
+-- TODO: SWITCH TO LOGGINGT
 {- |
 This function takes two arguments: StablePtr (comp) and Function (f).
 It extracts the state from 'comp' and applies 'f' to it.
@@ -33,6 +34,7 @@ firstFunction :: StablePtr (IORef (FMIT.FMIComponent a)) -> (FMIT.FMIComponent a
 firstFunction comp f =
   firstFunctionIO comp $ return . f
 
+-- TODO: SWITCH TO LOGGINGT
 firstFunctionIO :: StablePtr (IORef (FMIT.FMIComponent a)) -> (FMIT.FMIComponent a -> IO (W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status))) -> IO CInt
 firstFunctionIO comp f = do
   state <- getStateImpure comp
@@ -56,39 +58,52 @@ reportFatal state = (state {FMIT.fcState = FMIT.ERROR}, T.Fatal)
 -- ==============================================================
 {- |
 Returns a pointer to the state.
+The weird name (postfixed with  'e') is to allow the c code (see ex_water-tank repo csrs/hfmu.c) to receive the initial instantiate call.
 C type signature: fmi2String instanceName, fmi2Type fmuType, fmi2String fmuGUID, fmi2String fmuResourceLocation, constfmi2CallbackFunctions* functions, fmi2Boolean visible, fmi2Boolean loggingOn
 -}
 foreign export ccall fmi2Instantiatee :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
-fmi2Instantiatee :: CString -> CInt -> CString -> CString -> Ptr FMIT.CallbackFunctions -> CBool -> CBool -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
-fmi2Instantiatee _ _ guid _ ptrCbFuncs _ _ = do
+fmi2Instantiatee :: CString -- ^ 
+  -> CInt -- ^ 
+  -> CString -- ^ 
+  -> CString -- ^ 
+  -> Ptr FMIT.CallbackFunctions -- ^ 
+  -> CBool -- ^ 
+  -> CBool -- ^ 
+  -> IO (StablePtr (IORef (FMIT.FMIComponent a)))
+fmi2Instantiatee instanceName _ guid _ ptrCbFuncs _ _ = do
   -- Extract callback functions
   (cbFuncs :: FMIT.CallbackFunctions) <- peek ptrCbFuncs
   -- Create a test log message
-  instanceName :: CString <- newCString "instanceName"
   category :: CString <- newCString "logError"
-  msg :: CString <- newCString "HS-Message: Error"
+  msg :: CString <- newCString "HS-Message: Example Instantiate - logError"
   (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category msg
-  state <- getSetupImpure setupVar
-  case state of
-    Nothing -> putStrLn "NothingCase" >> (return . castPtrToStablePtr) nullPtr--(newStablePtr =<< newIORef FMIT.FMIComponent {fcState = }) -- ERROR SHOULD BE THROWN
-    Just s ->
-      let
-        nameSvMap = T.sSVs s
-        vRefNameMap = calcVRefNameMap nameSvMap
-        retPtr = do
-            ioref <- newIORef  FMIT.FMIComponent {fcVars = nameSvMap, fcVRefNameMap = vRefNameMap, fcDoStep = T.sDoStepFunc s,
-                                         fcEndTime = Nothing, fcState = FMIT.Instantiated, fcPeriod = T.sPeriod s, fcRemTime = T.sPeriod s, fcUserState = T.sUserState s}
-            newStablePtr ioref in
+  let loggingFunction = createLoggingFunction cbFuncs "haskellFMU" in
+    -- Retrieve the user defined state
+    do 
+      loggingFunction Ok "HS-Message: Example Instantiate - logOk"
+      state <- getSetupImpure setupVar
+      case state of
+        -- The user has not provided any setup. This is an INVALID FMU
+        Nothing -> putStrLn "NothingCase" >> (return . castPtrToStablePtr) nullPtr--(newStablePtr =<< newIORef FMIT.FMIComponent {fcState = }) -- ERROR SHOULD BE THROWN
+        -- The user has provided a setup. Convert this into an fmi2Component, i.e. a void*
+        Just s ->
+          let
+            nameSvMap = T.sSVs s
+            vRefNameMap = calcVRefNameMap nameSvMap
+            retPtr = do
+                ioref <- newIORef  FMIT.FMIComponent {fcVars = nameSvMap, fcVRefNameMap = vRefNameMap, fcDoStep = T.sDoStepFunc s,
+                                            fcEndTime = Nothing, fcState = FMIT.Instantiated, fcPeriod = T.sPeriod s, fcRemTime = T.sPeriod s, fcUserState = T.sUserState s}
+                newStablePtr ioref in
 
-        do
-          guid' <- peekCString guid
-          when (T.sGuid s /= guid') . (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category <$> newCString "Invalid GUID"
-          retPtr
+            do
+              guid' <- peekCString guid
+              when (T.sGuid s /= guid') . (mkFunPtrLogger . FMIT.logger $ cbFuncs) nullPtr instanceName (CInt 3) category <$> newCString "Invalid GUID"
+              retPtr
 
 {- |
 Converts a HashMap String -> ScalarVariable to -}
 calcVRefNameMap :: T.SVs -> FMIT.VRefNameMap
-calcVRefNameMap xs = HM.foldrWithKey (\k v acc -> IM.insert (T.svRef v) k acc) IM.empty xs 
+calcVRefNameMap = HM.foldrWithKey (\k v acc -> IM.insert (T.svRef v) k acc) IM.empty
 
 {- |
 Defines the end time.
@@ -117,13 +132,13 @@ enterInitializationMode state =
     do
       W.tell [T.LogEntry T.LogError "FMU not instantiated or End Time not defined."]
       return $ reportFatal state
-    
+
 {- |
 Changes state to slaveInitialized
 -}
 foreign export ccall fmi2ExitInitializationMode :: FMIFT.FMIExitInitializationModeType a
 fmi2ExitInitializationMode :: FMIFT.FMIExitInitializationModeType a
-fmi2ExitInitializationMode comp = 
+fmi2ExitInitializationMode comp =
   firstFunction comp exitInitializationMode
 
 exitInitializationMode :: FMIT.FMIComponent a -> W.Writer [T.LogEntry] (FMIT.FMIComponent a, T.Status)
@@ -158,7 +173,7 @@ foreign export ccall fmi2FreeInstance :: FMIFT.FMIFreeInstanceType a
 fmi2FreeInstance :: FMIFT.FMIFreeInstanceType a
 fmi2FreeInstance comp = do
   freeStablePtr comp
-  pure . FMIT.statusToCInt $ T.OK 
+  pure . FMIT.statusToCInt $ T.OK
 
 -- ==============================================================
 -- =================== SET FUNCTIONS ============================
@@ -213,7 +228,7 @@ setLogic state@FMIT.FMIComponent {fcVars = vs} vRefs vVals =
         updateValWithValRef :: T.SV -> T.SV
         updateValWithValRef x = if T.svRef x == valRef then x {T.svVal = valVal} else x
 
-    
+
 
 -- ==============================================================
 -- =================== GET FUNCTIONS ============================
@@ -269,7 +284,7 @@ getLogic state vRefs valConvF =
     case values of
       Nothing ->
         do
-          W.tell $ [T.LogEntry T.LogWarning "Could not find variables to get"]
+          W.tell [T.LogEntry T.LogWarning "Could not find variables to get"]
           return (Nothing, T.Fatal)
       x -> return (x, T.OK)
 
@@ -298,7 +313,7 @@ fmi2DoStep comp ccp css ns =
       ccp' = realToFrac ccp
       f state = do
         w <- doStepLogic state ccp' css' (toBool ns)
-        let ((state',status),log) =  W.runWriter $ w
+        let ((state',status),log) =  W.runWriter w
         case status of
           T.OK -> return $ return (state', T.OK)--writeStateImpure comp state' >> (pure . FMIT.statusToCInt) T.OK
           _ -> return $ return (state, status)
@@ -357,42 +372,48 @@ mFunc l iw = do
 
 
 -- ==============================================================
--- =================== SETUP FUNCTIONs ==========================
+-- =================== USER SETUP FUNCTIONs ==========================
 -- ==============================================================
 
--- Invoked from FMU
-setup :: T.Setup a -> IO ()
+-- Store the setup record
+setup :: T.Setup a -- ^ 
+  -> IO ()
 setup = storeSetupImpure
 
--- Functions related to the user defined doStep function
+-- Variable containing the user-defined setup record
 {-# NOINLINE setupVar #-}
 setupVar :: IORef (Maybe (T.Setup a))
 setupVar = unsafePerformIO $ newIORef Nothing
 
-storeSetupImpure :: T.Setup a -> IO ()
+storeSetupImpure :: T.Setup a -- ^ 
+  -> IO ()
 storeSetupImpure = writeIORef setupVar . Just
-
-getSetupImpure :: IORef (Maybe (T.Setup a)) -> IO (Maybe (T.Setup a))
+-- Retrieve the user defined setup record
+getSetupImpure :: IORef (Maybe (T.Setup a)) -- ^ 
+  -> IO (Maybe (T.Setup a))
 getSetupImpure = readIORef
 
 
 -- ==============================================================
--- =================== STATE FUNCTIONs ==========================
+-- =================== FMU STATE FUNCTIONs ==========================
 -- ==============================================================
 
--- Retrieves state
-getStateImpure :: StablePtr (IORef a) -> IO a
+-- Retrieves FMU state state
+getStateImpure :: StablePtr (IORef a) -- ^ 
+  -> IO a
 getStateImpure = deRefStablePtr >=> readIORef
 
--- Stores state
-writeStateImpure :: StablePtr (IORef a) -> a -> IO ()
+-- Store FMU state
+writeStateImpure :: StablePtr (IORef a) -- ^ 
+  -> a -- ^ 
+  -> IO ()
 writeStateImpure ptr state = do
   ioref <- deRefStablePtr ptr
   writeIORef ioref state
 
-
-
-updStateCalcStatusImpure :: FMIT.FMUStateType a -> (FMIT.FMIComponent a,T.Status) -> IO CInt
+updStateCalcStatusImpure :: FMIT.FMUStateType a -- ^ 
+  -> (FMIT.FMIComponent a,T.Status) -- ^ 
+  -> IO CInt
 updStateCalcStatusImpure comp (state, status) = writeStateImpure comp state >> (pure . FMIT.statusToCInt) status
 
 -- ==============================================================

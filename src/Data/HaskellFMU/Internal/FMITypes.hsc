@@ -26,6 +26,7 @@ type FMUStateType a = StablePtr (IORef (FMIComponent a))
 
 type FMIFuncReturn = IO CInt
 
+-- Value Reference to Name mapping
 type VRefNameMap = IM.IntMap String
 
 data FMIComponent x = FMIComponent {fcVars :: T.SVs,

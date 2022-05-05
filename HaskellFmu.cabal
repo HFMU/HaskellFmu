@@ -60,7 +60,7 @@ library
   Ghc-Options:
               -fobject-code
   -- Modules exported by the library.
-  exposed-modules: HMOperations, HaskellFMU, Data.HaskellFMU.Types
+  exposed-modules: HMOperations, HaskellFMU, Data.HaskellFMU.Types, LogFunctions
 
   -- Modules included in this library but not exported.
   other-modules: Data.HaskellFMU.Internal.FMITypes,  Data.HaskellFMU.Internal.FMIFunctionTypes

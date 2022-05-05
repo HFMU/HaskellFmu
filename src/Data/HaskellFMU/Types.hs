@@ -26,6 +26,7 @@ newtype UserState x = UserState x
 
 data DoStepResult x = DoStepResult {dsrStatus :: Status, dsrSvs :: SVs, dsrState :: UserState x }
 
+-- TODO: SWITCH TO LOGGINGT
 type DoStepFunType a = SVs -> UserState a -> IO (W.Writer [LogEntry] (DoStepResult a))
 
 data Setup a = Setup {sSVs :: SVs,
